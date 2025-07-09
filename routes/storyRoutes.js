@@ -6,14 +6,14 @@ import {
     deleteStory,
     updateStory
 } from "../controllers/storyController.js";
-import { authenticateToken } from "../middleware/auth.js";
+import { authenticate } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 router.get("/", getAllStories);
 router.get("/:id", getStoryById);
-router.post("/", authenticateToken, createStory);
-router.delete("/:id", authenticateToken, deleteStory);
-router.put("/:id", authenticateToken, updateStory); // opsional
+router.post("/", authenticate, createStory);
+router.delete("/:id", authenticate, deleteStory);
+router.put("/:id", authenticate, updateStory); // opsional
 
 export default router;
