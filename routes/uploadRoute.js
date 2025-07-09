@@ -2,11 +2,11 @@
 import express from 'express';
 import upload from '../middleware/authMiddleware.js';
 import supabase from '../supabaseClient.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticate } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-router.post('/', authenticateToken, upload.single('image'), async (req, res) => {
+router.post('/', authenticate, upload.single('image'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
 
