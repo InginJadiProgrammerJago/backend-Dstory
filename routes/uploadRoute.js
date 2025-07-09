@@ -1,6 +1,6 @@
 // routes/uploadRoute.js
 import express from 'express';
-import upload from '../middleware/uploadMulter.js';
+import upload from '../middleware/authMiddleware.js';
 import supabase from '../supabaseClient.js';
 import { authenticateToken } from '../middleware/auth.js';
 
