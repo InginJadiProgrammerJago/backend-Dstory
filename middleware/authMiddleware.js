@@ -3,7 +3,7 @@ import multer from 'multer';
 
 
 export const authenticate = (req, res, next) => {
-    const authHeader = req.headersp['authorization'];
+    const authHeader = req.headers['authorization'];
     if (!authHeader) return res.status(401).json({ message: "Token tidak ditemukan" });
 
     const token = authHeader.split(" ")[1];
