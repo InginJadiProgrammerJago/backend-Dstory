@@ -1,9 +1,9 @@
 // routes/geocode.js
 import express from "express";
-const router = express.Router();
-const fetch = require('node-fetch');
-const NodeCache = require('node-cache');
+import fetch from "node-fetch";
+import NodeCache from "node-cache";
 
+const router = express.Router();
 const cache = new NodeCache({ stdTTL: 86400 }); // Cache 1 hari
 
 router.get('/reverse', async (req, res) => {
