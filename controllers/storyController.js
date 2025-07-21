@@ -1,4 +1,5 @@
 import prisma from "../prismaClient.js";
+import supabase from "../supabaseClient.js";
 
 export const getAllStories = async (req, res) => {
     try {
@@ -27,23 +28,51 @@ export const getStoryById = async (req, res) => {
 };
 
 export const createStory = async (req, res) => {
-    const { title, content, image, latitude, longitude } = req.body;
+    const { title, content, latitude, longitude } = req.body;
     const userId = req.user.userId;
+    const file = req.file;
 
     try {
+        let imageUrl = null;
+
+        // 🔥 Jika file dikirim, upload ke Supabase
+        if (file) {
+            const fileName = `${Date.now()}-${file.originalname}`;
+            const { error: uploadError } = await supabase
+                .storage
+                .from("d-story-images")
+                .upload(fileName, file.buffer, {
+                    contentType: file.mimetype,
+                    upsert: true,
+                });
+
+            if (uploadError) throw uploadError;
+
+            // 🔗 Dapatkan URL publik
+            const { data: publicData } = supabase
+                .storage
+                .from("d-story-images")
+                .getPublicUrl(fileName);
+
+            imageUrl = publicData.publicUrl;
+        }
+
+        // 📝 Simpan ke PostgreSQL
         const story = await prisma.story.create({
             data: {
                 title,
                 content,
-                image,
+                imageUrl, // simpan hasil URL Supabase
                 latitude: parseFloat(latitude),
                 longitude: parseFloat(longitude),
-                userId
-            }
+                userId,
+            },
         });
+
         res.status(201).json({ message: "Cerita berhasil ditambahkan", story });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error("Error tambah story:", err.message);
+        res.status(500).json({ message: "Gagal menambahkan cerita", error: err.message });
     }
 };
 
