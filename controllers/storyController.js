@@ -1,3 +1,4 @@
+// controllers/storyController.js
 import prisma from "../prismaClient.js";
 import supabase from "../supabaseClient.js";
 
@@ -62,7 +63,7 @@ export const createStory = async (req, res) => {
             data: {
                 title,
                 content,
-                imageUrl, // simpan hasil URL Supabase
+                imageUrl,
                 latitude: parseFloat(latitude),
                 longitude: parseFloat(longitude),
                 userId,

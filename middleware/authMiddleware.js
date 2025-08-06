@@ -1,3 +1,4 @@
+// middleware/authMiddleware.js
 import jwt from "jsonwebtoken";
 import multer from 'multer';
 
@@ -18,7 +19,7 @@ export const authenticate = (req, res, next) => {
 };
 
 
-const storage = multer.memoryStorage(); // simpan di RAM -> ke Supabase
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 export default upload;

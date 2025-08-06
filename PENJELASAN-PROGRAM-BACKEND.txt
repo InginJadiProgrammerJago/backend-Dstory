@@ -1,0 +1,618 @@
+# 📖 D-Story Backend
+
+D-Story adalah backend aplikasi cerita berbasis lokasi. Mendukung upload gambar, autentikasi, dan integrasi peta.
+
+## 🚀 Teknologi
+- Express.js
+- PostgreSQL + Prisma
+- Supabase (untuk file/image)
+- JWT untuk autentikasi
+- Multer untuk upload file
+- OpenStreetMap Geocoding API
+
+## 📂 Struktur Folder
+
+📁 controllers
+│   ├── authController.js      # Register & Login
+│   └── storyController.js     # Operasi CRUD cerita
+
+📁 middleware
+│   └── authMiddleware.js      # JWT authentikasi & Multer upload
+
+📁 routes
+│   ├── authRoutes.js          # Endpoint /api/register & /api/login
+│   ├── storyRoutes.js         # Endpoint /api/stories/*
+│   ├── uploadRoute.js         # Endpoint /api/upload
+│   └── geocode.js             # Endpoint /api/geocode/reverse
+
+📄 index.js                     # Entry-point utama server Express
+📄 prismaClient.js              # Inisialisasi Prisma
+📄 supabaseClient.js            # Koneksi ke Supabase Storage
+📄 schema.prisma                # Skema Prisma
+
+📄 .env                         # Variabel lingkungan (harus disiapkan)
+📄 package.json                 # Info dependensi & script dev
+
+| METHOD | ENDPOINT                             | DESKRIPSI                           |
+| ------ | ------------------------------------ | ----------------------------------- |
+| POST   | `/api/register`                      | Register user                       |
+| POST   | `/api/login`                         | Login user, hasilkan JWT            |
+| GET    | `/api/stories`                       | Ambil semua cerita (publik)         |
+| GET    | `/api/stories/:id`                   | Ambil detail cerita tertentu        |
+| POST   | `/api/stories`                       | Tambah cerita (dengan upload image) |
+| PUT    | `/api/stories/:id`                   | Update cerita                       |
+| DELETE | `/api/stories/:id`                   | Hapus cerita                        |
+| POST   | `/api/upload`                        | Upload gambar terpisah              |
+| GET    | `/api/geocode/reverse?lat=..&lon=..` | Dapatkan nama lokasi dari koordinat |
+
+✨ Fitur Utama
+Autentikasi aman (bcrypt + JWT)
+
+Upload gambar ke Supabase
+
+Penyimpanan cerita dengan lokasi dan peta
+
+Reverse geocoding otomatis
+
+### SOURCECODE BACKEND 
+
+FOLDER CONTROLLERS
+
+// controllers/authController.js
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import prisma from "../prismaClient.js";
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Register
+export const register = async (req, res) => {
+    const { username, email, password } = req.body;
+    try {
+        const existingUser = await prisma.user.findUnique({ where: { email } });
+        if (existingUser) return res.status(400).json({ message: "Email sudah terdaftar" });
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = await prisma.user.create({
+            data: { username, email, password: hashedPassword }
+        });
+
+        res.status(201).json({ message: "Registrasi berhasil", user: { id: user.id, username: user.username, email: user.email } });
+    } catch (err) {
+        res.status(500).json({ message: "Gagal registrasi", error: err.message });
+    }
+};
+
+// Login
+export const login = async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) return res.status(400).json({ message: "Email tidak ditemukan" });
+
+        const isValid = await bcrypt.compare(password, user.password);
+        if (!isValid) return res.status(401).json({ message: "Password salah" });
+
+        const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "2h" });
+        res.status(200).json({ message: "Login berhasil", token });
+    } catch (err) {
+        res.status(500).json({ message: "Gagal login", error: err.message });
+    }
+};
+
+
+
+// controllers/storyController.js
+import prisma from "../prismaClient.js";
+import supabase from "../supabaseClient.js";
+
+export const getAllStories = async (req, res) => {
+    try {
+        const stories = await prisma.story.findMany({
+            include: { user: { select: { id: true, username: true } } },
+            orderBy: { createdAt: "desc" }
+        });
+        res.json(stories);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+export const getStoryById = async (req, res) => {
+    const { id } = req.params;
+    try {
+        const story = await prisma.story.findUnique({
+            where: { id: Number(id) },
+            include: { user: { select: { id: true, username: true } } }
+        });
+        if (!story) return res.status(404).json({ message: "Cerita tidak ditemukan" });
+        res.json(story);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+export const createStory = async (req, res) => {
+    const { title, content, latitude, longitude } = req.body;
+    const userId = req.user.userId;
+    const file = req.file;
+
+    try {
+        let imageUrl = null;
+
+        // 🔥 Jika file dikirim, upload ke Supabase
+        if (file) {
+            const fileName = `${Date.now()}-${file.originalname}`;
+            const { error: uploadError } = await supabase
+                .storage
+                .from("d-story-images")
+                .upload(fileName, file.buffer, {
+                    contentType: file.mimetype,
+                    upsert: true,
+                });
+
+            if (uploadError) throw uploadError;
+
+            // 🔗 Dapatkan URL publik
+            const { data: publicData } = supabase
+                .storage
+                .from("d-story-images")
+                .getPublicUrl(fileName);
+
+            imageUrl = publicData.publicUrl;
+        }
+
+        // 📝 Simpan ke PostgreSQL
+        const story = await prisma.story.create({
+            data: {
+                title,
+                content,
+                imageUrl,
+                latitude: parseFloat(latitude),
+                longitude: parseFloat(longitude),
+                userId,
+            },
+        });
+
+        res.status(201).json({ message: "Cerita berhasil ditambahkan", story });
+    } catch (err) {
+        console.error("Error tambah story:", err.message);
+        res.status(500).json({ message: "Gagal menambahkan cerita", error: err.message });
+    }
+};
+
+export const deleteStory = async (req, res) => {
+    const { id } = req.params;
+    try {
+        await prisma.story.delete({ where: { id: Number(id) } });
+        res.json({ message: "Cerita berhasil dihapus" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+export const updateStory = async (req, res) => {
+    const { id } = req.params;
+    const { title, content, image, latitude, longitude } = req.body;
+    try {
+        const updated = await prisma.story.update({
+            where: { id: Number(id) },
+            data: { title, content, image, latitude: parseFloat(latitude), longitude: parseFloat(longitude) }
+        });
+        res.json({ message: "Cerita berhasil diperbarui", story: updated });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+
+FOLDER MIDDLEWARE
+
+// middleware/authMiddleware.js
+import jwt from "jsonwebtoken";
+import multer from 'multer';
+
+
+export const authenticate = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ message: "Token tidak ditemukan" });
+
+    const token = authHeader.split(" ")[1];
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (err) {
+        res.status(403).json({ message: "Token tidak valid" });
+    }
+};
+
+
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+export default upload;
+
+
+FOLDER ROUTES (AUTHROUTES + GEOCODE + STORYROUTES + UPLOADROUTE)
+
+// routes/authRoutes.js
+import express from "express";
+import { register, login } from "../controllers/authController.js";
+
+const router = express.Router();
+
+router.post("/register", register);
+router.post("/login", login);
+
+export default router;
+
+
+
+// routes/geocode.js
+import express from "express";
+import fetch from "node-fetch";
+import NodeCache from "node-cache";
+
+const router = express.Router();
+const cache = new NodeCache({ stdTTL: 86400 }); // Cache 1 hari
+
+router.get('/reverse', async (req, res) => {
+    const { lat, lon } = req.query;
+    const cacheKey = `${lat},${lon}`;
+
+    // Cek cache
+    if (cache.has(cacheKey)) {
+        return res.json(cache.get(cacheKey));
+    }
+
+    try {
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+            {
+                headers: {
+                    'User-Agent': 'DstoryApp/1.0 (rinaldimulyatam@gmail.com)',
+                    'Accept-Language': 'id',
+                }
+            }
+        );
+
+        if (!response.ok) throw new Error('Geocoding failed');
+
+        const data = await response.json();
+
+        // Format alamat lebih ringkas
+        let address = 'Lokasi tidak ditemukan';
+        if (data.display_name) {
+            const parts = data.display_name.split(',');
+            address = parts.slice(0, 4).join(', ').trim();
+        }
+
+        // Simpan ke cache
+        cache.set(cacheKey, { address });
+
+        res.json({ address });
+    } catch (error) {
+        console.error('Geocoding error:', error);
+        res.status(500).json({ error: 'Geocoding failed' });
+    }
+});
+
+export default router;
+
+
+
+    // routes/storyRoutes.js
+    import express from "express";
+    import {
+        getAllStories,
+        getStoryById,
+        createStory,
+        deleteStory,
+        updateStory
+    } from "../controllers/storyController.js";
+    import { authenticate } from '../middleware/authMiddleware.js';
+    import upload from '../middleware/authMiddleware.js';
+
+    const router = express.Router();
+
+    router.get("/", getAllStories);
+    router.get("/:id", getStoryById);
+    router.post("/", authenticate, upload.single('image'), createStory);
+    router.delete("/:id", authenticate, deleteStory);
+    router.put("/:id", authenticate, updateStory);
+
+    export default router;
+
+
+
+// routes/uploadRoute.js
+import express from 'express';
+import upload from '../middleware/authMiddleware.js';
+import supabase from '../supabaseClient.js';
+import { authenticate } from '../middleware/authMiddleware.js';
+
+const router = express.Router();
+
+router.post('/', authenticate, upload.single('image'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+
+        const file = req.file;
+        const fileName = `${Date.now()}-${file.originalname}`;
+
+        const { data, error } = await supabase.storage
+            .from('d-story-images')
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+                upsert: true,
+            });
+
+        if (error) throw error;
+
+        const { data: publicUrl } = supabase.storage
+            .from('d-story-images')
+            .getPublicUrl(fileName);
+
+        return res.status(200).json({
+            message: 'Upload sukses',
+            url: publicUrl.publicUrl,
+        });
+
+    } catch (err) {
+        return res.status(500).json({ message: 'Upload gagal', error: err.message });
+    }
+});
+
+export default router;
+
+ROOT
+
+// index.js
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import uploadRoutes from './routes/uploadRoute.js';
+import authRoutes from "./routes/authRoutes.js";
+import storyRoutes from './routes/storyRoutes.js';
+import geocodeRoutes from './routes/geocode.js';
+
+dotenv.config();
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+// Import Routes
+app.use("/api", authRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/stories", storyRoutes);
+app.use('/api/geocode', geocodeRoutes);
+
+app.use((req, res, next) => {
+    console.log('[BODY]', req.body);
+    console.log('[FILE]', req.file);
+    next();
+});
+
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+
+// prismaClient.js
+import pkg from '@prisma/client';
+const { PrismaClient } = pkg;
+
+const prisma = new PrismaClient();
+export default prisma;
+
+
+// supabaseClient.js
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+dotenv.config();
+
+const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY 
+);
+
+export default supabase;
+
+
+{
+  "name": "backend-dstory",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@prisma/client": "^6.12.0",
+    "@supabase/supabase-js": "^2.52.0",
+    "accepts": "^2.0.0",
+    "anymatch": "^3.1.3",
+    "append-field": "^1.0.0",
+    "balanced-match": "^1.0.2",
+    "bcryptjs": "^3.0.2",
+    "binary-extensions": "^2.3.0",
+    "body-parser": "^2.2.0",
+    "brace-expansion": "^1.1.12",
+    "braces": "^3.0.3",
+    "buffer-equal-constant-time": "^1.0.1",
+    "buffer-from": "^1.1.2",
+    "busboy": "^1.6.0",
+    "bytes": "^3.1.2",
+    "call-bind-apply-helpers": "^1.0.2",
+    "call-bound": "^1.0.4",
+    "chokidar": "^3.6.0",
+    "concat-map": "^0.0.1",
+    "concat-stream": "^2.0.0",
+    "content-disposition": "^1.0.0",
+    "content-type": "^1.0.5",
+    "cookie": "^0.7.2",
+    "cookie-signature": "^1.2.2",
+    "cors": "^2.8.5",
+    "debug": "^4.4.1",
+    "depd": "^2.0.0",
+    "dotenv": "^17.2.0",
+    "dunder-proto": "^1.0.1",
+    "ecdsa-sig-formatter": "^1.0.11",
+    "ee-first": "^1.1.1",
+    "encodeurl": "^2.0.0",
+    "es-define-property": "^1.0.1",
+    "es-errors": "^1.3.0",
+    "es-object-atoms": "^1.1.1",
+    "escape-html": "^1.0.3",
+    "etag": "^1.8.1",
+    "express": "^5.1.0",
+    "fill-range": "^7.1.1",
+    "finalhandler": "^2.1.0",
+    "forwarded": "^0.2.0",
+    "fresh": "^2.0.0",
+    "function-bind": "^1.1.2",
+    "get-intrinsic": "^1.3.0",
+    "get-proto": "^1.0.1",
+    "glob-parent": "^5.1.2",
+    "gopd": "^1.2.0",
+    "has-flag": "^3.0.0",
+    "has-symbols": "^1.1.0",
+    "hasown": "^2.0.2",
+    "http-errors": "^2.0.0",
+    "iconv-lite": "^0.6.3",
+    "ignore-by-default": "^1.0.1",
+    "inherits": "^2.0.4",
+    "ipaddr.js": "^1.9.1",
+    "is-binary-path": "^2.1.0",
+    "is-extglob": "^2.1.1",
+    "is-glob": "^4.0.3",
+    "is-number": "^7.0.0",
+    "is-promise": "^4.0.0",
+    "isows": "^1.0.7",
+    "jiti": "^2.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "jwa": "^1.4.2",
+    "jws": "^3.2.2",
+    "lodash.includes": "^4.3.0",
+    "lodash.isboolean": "^3.0.3",
+    "lodash.isinteger": "^4.0.4",
+    "lodash.isnumber": "^3.0.3",
+    "lodash.isplainobject": "^4.0.6",
+    "lodash.isstring": "^4.0.1",
+    "lodash.once": "^4.1.1",
+    "math-intrinsics": "^1.1.0",
+    "media-typer": "^1.1.0",
+    "merge-descriptors": "^2.0.0",
+    "mime-db": "^1.54.0",
+    "mime-types": "^3.0.1",
+    "minimatch": "^3.1.2",
+    "minimist": "^1.2.8",
+    "mkdirp": "^0.5.6",
+    "ms": "^2.1.3",
+    "multer": "^2.0.2",
+    "negotiator": "^1.0.0",
+    "node-cache": "^5.1.2",
+    "node-fetch": "^3.3.2",
+    "normalize-path": "^3.0.0",
+    "object-assign": "^4.1.1",
+    "object-inspect": "^1.13.4",
+    "on-finished": "^2.4.1",
+    "once": "^1.4.0",
+    "parseurl": "^1.3.3",
+    "path-to-regexp": "^8.2.0",
+    "picomatch": "^2.3.1",
+    "proxy-addr": "^2.0.7",
+    "pstree.remy": "^1.1.8",
+    "qs": "^6.14.0",
+    "range-parser": "^1.2.1",
+    "raw-body": "^3.0.0",
+    "readable-stream": "^3.6.2",
+    "readdirp": "^3.6.0",
+    "router": "^2.2.0",
+    "safe-buffer": "^5.2.1",
+    "safer-buffer": "^2.1.2",
+    "semver": "^7.7.2",
+    "send": "^1.2.0",
+    "serve-static": "^2.2.0",
+    "setprototypeof": "^1.2.0",
+    "side-channel": "^1.1.0",
+    "side-channel-list": "^1.0.0",
+    "side-channel-map": "^1.0.1",
+    "side-channel-weakmap": "^1.0.2",
+    "simple-update-notifier": "^2.0.0",
+    "statuses": "^2.0.2",
+    "streamsearch": "^1.1.0",
+    "string_decoder": "^1.3.0",
+    "supports-color": "^5.5.0",
+    "to-regex-range": "^5.0.1",
+    "toidentifier": "^1.0.1",
+    "touch": "^3.1.1",
+    "tr46": "^0.0.3",
+    "type-is": "^2.0.1",
+    "typedarray": "^0.0.6",
+    "undefsafe": "^2.0.5",
+    "undici-types": "^7.8.0",
+    "unpipe": "^1.0.0",
+    "util-deprecate": "^1.0.2",
+    "vary": "^1.1.2",
+    "webidl-conversions": "^3.0.1",
+    "whatwg-url": "^5.0.0",
+    "wrappy": "^1.0.2",
+    "ws": "^8.18.3",
+    "xtend": "^4.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "prisma": "^6.12.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
+
+
+// This file was generated by Prisma 4.18.0
+generator client {
+  provider = "prisma-client-js"
+  
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int            @id @default(autoincrement())
+  username      String
+  email         String         @unique
+  password      String
+  stories       Story[] 
+  subscriptions Subscription[] 
+}
+
+model Story {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  imageUrl  String?
+  latitude  Float
+  longitude Float
+  createdAt DateTime @default(now())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Subscription {
+  id        Int      @id @default(autoincrement())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
